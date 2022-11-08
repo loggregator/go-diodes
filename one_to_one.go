@@ -1,6 +1,7 @@
 package diodes
 
 import (
+	"sync"
 	"sync/atomic"
 	"unsafe"
 )
@@ -35,6 +36,7 @@ type OneToOne struct {
 	writeIndex uint64
 	readIndex  uint64
 	alerter    Alerter
+	mu         sync.Mutex
 }
 
 // NewOneToOne creates a new diode is meant to be used by a single reader and
@@ -60,9 +62,10 @@ func (d *OneToOne) Set(data GenericDataType) {
 		data: data,
 		seq:  d.writeIndex,
 	}
+	d.mu.Lock()
 	d.writeIndex++
-
 	atomic.StorePointer(&d.buffer[idx], unsafe.Pointer(newBucket))
+	d.mu.Unlock()
 }
 
 // TryNext will attempt to read from the next slot of the ring buffer.
@@ -76,23 +79,6 @@ func (d *OneToOne) TryNext() (data GenericDataType, ok bool) {
 	// opportunity to write a value into the diode. This value must be ignored
 	// and the read head must not increment.
 	if result == nil {
-		return nil, false
-	}
-
-	// When the seq value is less than the current read index that means a
-	// value was read from idx that was previously written but has since has
-	// been dropped. This value must be ignored and the read head must not
-	// increment.
-	//
-	// The simulation for this scenario assumes the fast forward occurred as
-	// detailed below.
-	//
-	// 5. The reader reads again getting seq 5. It then reads again expecting
-	//    seq 6 but gets seq 2. This is a read of a stale value that was
-	//    effectively "dropped" so the read fails and the read head stays put.
-	//    `| 4 | 5 | 2 | 3 |` r: 7, w: 6
-	//
-	if result.seq < d.readIndex {
 		return nil, false
 	}
 
@@ -116,9 +102,16 @@ func (d *OneToOne) TryNext() (data GenericDataType, ok bool) {
 	//    `| 4 | 5 | 2 | 3 |` r: 5, w: 6
 	//
 	if result.seq > d.readIndex {
-		dropped := result.seq - d.readIndex
-		d.readIndex = result.seq
+		d.mu.Lock()
+		dropped := d.writeIndex - d.readIndex - uint64(len(d.buffer))
 		d.alerter.Alert(int(dropped))
+		d.readIndex = d.writeIndex - uint64(len(d.buffer))
+		i := d.readIndex % uint64(len(d.buffer))
+		if i != idx {
+			atomic.CompareAndSwapPointer(&d.buffer[idx], nil, unsafe.Pointer(result))
+			result = (*bucket)(atomic.SwapPointer(&d.buffer[i], nil))
+		}
+		d.mu.Unlock()
 	}
 
 	// Only increment read index if a regular read occurred (where seq was

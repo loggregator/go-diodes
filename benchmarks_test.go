@@ -7,7 +7,6 @@ import (
 	"os"
 	"sync"
 	"testing"
-	"time"
 
 	"code.cloudfoundry.org/go-diodes"
 )
@@ -20,251 +19,310 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func BenchmarkOneToOnePoller(b *testing.B) {
-	d := diodes.NewPoller(diodes.NewOneToOne(b.N, diodes.AlertFunc(func(missed int) {
-		panic("Oops...")
-	})))
+// func BenchmarkOneToOnePerf(b *testing.B) {
+// var dropped int
+// d := diodes.NewOneToOne(100, diodes.AlertFunc(func(missed int) {
+// 	dropped += missed
+// }))
 
+// var wg sync.WaitGroup
+// wg.Add(1)
+// defer wg.Wait()
+
+// b.ResetTimer()
+
+// go func() {
+// 	defer wg.Done()
+// 	for i := 0; i < b.N; i++ {
+// 		data := randData(i)
+// 		d.Set(diodes.GenericDataType(data))
+// 	}
+// }()
+
+// for i := 0; i < b.N; i++ {
+// 	d.TryNext()
+// }
+
+// b.ReportMetric(float64(dropped)/float64(b.N), "drops/ops")
+// }
+
+func BenchmarkManyToOnePerf(b *testing.B) {
+	var dropped int
+	d := diodes.NewManyToOne(100, diodes.AlertFunc(func(missed int) {
+		dropped += missed
+	}))
+
+	var numWriters = 10
 	var wg sync.WaitGroup
-	wg.Add(1)
+	wg.Add(numWriters)
 	defer wg.Wait()
 
-	go func() {
-		defer wg.Done()
-		for i := 0; i < b.N; i++ {
-			data := randData(i)
-			d.Set(diodes.GenericDataType(data))
-		}
-	}()
-
 	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
-		d.Next()
+	for i := 0; i < numWriters; i++ {
+		go writeToDiode(b.N/numWriters, d, &wg)
 	}
+
+	for i := 0; i < b.N; i++ {
+		d.TryNext()
+	}
+
+	b.ReportMetric(float64(dropped)/float64(b.N), "drops/ops")
 }
 
-func BenchmarkOneToOneWaiter(b *testing.B) {
-	d := diodes.NewWaiter(diodes.NewOneToOne(b.N, diodes.AlertFunc(func(missed int) {
-		panic("Oops...")
-	})))
-
-	var wg sync.WaitGroup
-	wg.Add(1)
-	defer wg.Wait()
-
-	go func() {
-		defer wg.Done()
-		for i := 0; i < b.N; i++ {
-			data := randData(i)
-			d.Set(diodes.GenericDataType(data))
-		}
-	}()
-
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
-		d.Next()
-	}
-}
-
-func BenchmarkManyToOnePoller(b *testing.B) {
-	d := diodes.NewPoller(diodes.NewManyToOne(b.N, diodes.AlertFunc(func(missed int) {
-		panic("Oops...")
-	})))
-
-	var wg sync.WaitGroup
-	wg.Add(1)
-	defer wg.Wait()
-
-	go func() {
-		defer wg.Done()
-		for i := 0; i < b.N; i++ {
-			data := randData(i)
-			d.Set(diodes.GenericDataType(data))
-		}
-	}()
-
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
-		d.Next()
-	}
-}
-
-func BenchmarkManyToOneWaiter(b *testing.B) {
-	d := diodes.NewWaiter(diodes.NewManyToOne(b.N, diodes.AlertFunc(func(missed int) {
-		panic("Oops...")
-	})))
-
-	var wg sync.WaitGroup
-	wg.Add(1)
-	defer wg.Wait()
-
-	go func() {
-		defer wg.Done()
-		for i := 0; i < b.N; i++ {
-			data := randData(i)
-			d.Set(diodes.GenericDataType(data))
-		}
-	}()
-
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
-		d.Next()
-	}
-}
-
-func BenchmarkChannel(b *testing.B) {
-	c := make(chan []byte, b.N)
-
-	var wg sync.WaitGroup
-	wg.Add(1)
-	defer wg.Wait()
-
-	go func() {
-		defer wg.Done()
-		for i := 0; i < b.N; i++ {
-			data := randData(i)
-			c <- *data
-		}
-	}()
-
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
-		<-c
-	}
-}
-
-func BenchmarkOneToOnePollerDrain(b *testing.B) {
-	d := diodes.NewPoller(diodes.NewOneToOne(100, diodes.AlertFunc(func(missed int) {
-		// NOP
-	})))
-
-	var wg sync.WaitGroup
-	wg.Add(1)
-
-	go func() {
-		wg.Done()
-		for {
-			d.Next()
-		}
-	}()
-
-	wg.Wait()
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
+func writeToDiode(n int, diode *diodes.ManyToOne, wg *sync.WaitGroup) {
+	defer wg.Done()
+	for i := 0; i < n; i++ {
 		data := randData(i)
-		d.Set(diodes.GenericDataType(data))
+		diode.Set(diodes.GenericDataType(data))
 	}
 }
 
-func BenchmarkOneToOneWaiterDrain(b *testing.B) {
-	d := diodes.NewWaiter(diodes.NewOneToOne(100, diodes.AlertFunc(func(missed int) {
-		// NOP
-	})))
+// func BenchmarkOneToOnePoller(b *testing.B) {
+// 	d := diodes.NewPoller(diodes.NewOneToOne(b.N, diodes.AlertFunc(func(missed int) {
+// 		panic("Oops...")
+// 	})))
 
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		wg.Done()
-		for {
-			d.Next()
-		}
-	}()
+// 	var wg sync.WaitGroup
+// 	wg.Add(1)
+// 	defer wg.Wait()
 
-	wg.Wait()
-	b.ResetTimer()
+// 	go func() {
+// 		defer wg.Done()
+// 		for i := 0; i < b.N; i++ {
+// 			data := randData(i)
+// 			d.Set(diodes.GenericDataType(data))
+// 		}
+// 	}()
 
-	for i := 0; i < b.N; i++ {
-		data := randData(i)
-		d.Set(diodes.GenericDataType(data))
-	}
-}
+// 	b.ResetTimer()
 
-func BenchmarkChannelDrain(b *testing.B) {
-	c := make(chan []byte, 100)
-	var wg sync.WaitGroup
-	wg.Add(1)
+// 	for i := 0; i < b.N; i++ {
+// 		d.Next()
+// 	}
+// }
 
-	go func() {
-		wg.Done()
-		for range c {
-		}
-	}()
+// func BenchmarkOneToOneWaiter(b *testing.B) {
+// 	d := diodes.NewWaiter(diodes.NewOneToOne(b.N, diodes.AlertFunc(func(missed int) {
+// 		panic("Oops...")
+// 	})))
 
-	wg.Wait()
-	b.ResetTimer()
+// 	var wg sync.WaitGroup
+// 	wg.Add(1)
+// 	defer wg.Wait()
 
-	for i := 0; i < b.N; i++ {
-		data := randData(i)
-		select {
-		case c <- *data:
-		default:
-			drainChannel(c)
-		}
-	}
-}
+// 	go func() {
+// 		defer wg.Done()
+// 		for i := 0; i < b.N; i++ {
+// 			data := randData(i)
+// 			d.Set(diodes.GenericDataType(data))
+// 		}
+// 	}()
 
-func BenchmarkManyWritersDiode(b *testing.B) {
-	d := diodes.NewWaiter(diodes.NewManyToOne(10000, diodes.AlertFunc(func(int) {
-		// NOP
-	})))
+// 	b.ResetTimer()
 
-	var wg sync.WaitGroup
-	wg.Add(1)
+// 	for i := 0; i < b.N; i++ {
+// 		d.Next()
+// 	}
+// }
 
-	go func() {
-		wg.Done()
-		for {
-			d.Next()
-			time.Sleep(100 * time.Millisecond)
-		}
-	}()
+// func BenchmarkManyToOnePoller(b *testing.B) {
+// 	d := diodes.NewPoller(diodes.NewManyToOne(b.N, diodes.AlertFunc(func(missed int) {
+// 		panic("Oops...")
+// 	})))
 
-	wg.Wait()
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		var i int
-		for pb.Next() {
-			data := randData(i)
-			i++
-			d.Set(diodes.GenericDataType(data))
-		}
-	})
-}
+// 	var wg sync.WaitGroup
+// 	wg.Add(1)
+// 	defer wg.Wait()
 
-func BenchmarkManyWritersChannel(b *testing.B) {
-	c := make(chan []byte, 10000)
+// 	go func() {
+// 		defer wg.Done()
+// 		for i := 0; i < b.N; i++ {
+// 			data := randData(i)
+// 			d.Set(diodes.GenericDataType(data))
+// 		}
+// 	}()
 
-	var wg sync.WaitGroup
-	wg.Add(1)
+// 	b.ResetTimer()
 
-	go func() {
-		wg.Done()
-		for range c {
-			time.Sleep(100 * time.Millisecond)
-		}
-	}()
+// 	for i := 0; i < b.N; i++ {
+// 		d.Next()
+// 	}
+// }
 
-	wg.Wait()
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		var i int
-		for pb.Next() {
-			data := randData(i)
-			i++
-			select {
-			case c <- *data:
-			default:
-				drainChannel(c)
-			}
-		}
-	})
-}
+// func BenchmarkManyToOneWaiter(b *testing.B) {
+// 	d := diodes.NewWaiter(diodes.NewManyToOne(b.N, diodes.AlertFunc(func(missed int) {
+// 		panic("Oops...")
+// 	})))
+
+// 	var wg sync.WaitGroup
+// 	wg.Add(1)
+// 	defer wg.Wait()
+
+// 	go func() {
+// 		defer wg.Done()
+// 		for i := 0; i < b.N; i++ {
+// 			data := randData(i)
+// 			d.Set(diodes.GenericDataType(data))
+// 		}
+// 	}()
+
+// 	b.ResetTimer()
+
+// 	for i := 0; i < b.N; i++ {
+// 		d.Next()
+// 	}
+// }
+
+// func BenchmarkChannel(b *testing.B) {
+// 	c := make(chan []byte, b.N)
+
+// 	var wg sync.WaitGroup
+// 	wg.Add(1)
+// 	defer wg.Wait()
+
+// 	go func() {
+// 		defer wg.Done()
+// 		for i := 0; i < b.N; i++ {
+// 			data := randData(i)
+// 			c <- *data
+// 		}
+// 	}()
+
+// 	b.ResetTimer()
+
+// 	for i := 0; i < b.N; i++ {
+// 		<-c
+// 	}
+// }
+
+// func BenchmarkOneToOnePollerDrain(b *testing.B) {
+// 	d := diodes.NewPoller(diodes.NewOneToOne(100, diodes.AlertFunc(func(missed int) {
+// 		// NOP
+// 	})))
+
+// 	var wg sync.WaitGroup
+// 	wg.Add(1)
+
+// 	go func() {
+// 		wg.Done()
+// 		for {
+// 			d.Next()
+// 		}
+// 	}()
+
+// 	wg.Wait()
+// 	b.ResetTimer()
+
+// 	for i := 0; i < b.N; i++ {
+// 		data := randData(i)
+// 		d.Set(diodes.GenericDataType(data))
+// 	}
+// }
+
+// func BenchmarkOneToOneWaiterDrain(b *testing.B) {
+// 	d := diodes.NewWaiter(diodes.NewOneToOne(100, diodes.AlertFunc(func(missed int) {
+// 		// NOP
+// 	})))
+
+// 	var wg sync.WaitGroup
+// 	wg.Add(1)
+// 	go func() {
+// 		wg.Done()
+// 		for {
+// 			d.Next()
+// 		}
+// 	}()
+
+// 	wg.Wait()
+// 	b.ResetTimer()
+
+// 	for i := 0; i < b.N; i++ {
+// 		data := randData(i)
+// 		d.Set(diodes.GenericDataType(data))
+// 	}
+// }
+
+// func BenchmarkChannelDrain(b *testing.B) {
+// 	c := make(chan []byte, 100)
+// 	var wg sync.WaitGroup
+// 	wg.Add(1)
+
+// 	go func() {
+// 		wg.Done()
+// 		for range c {
+// 		}
+// 	}()
+
+// 	wg.Wait()
+// 	b.ResetTimer()
+
+// 	for i := 0; i < b.N; i++ {
+// 		data := randData(i)
+// 		select {
+// 		case c <- *data:
+// 		default:
+// 			drainChannel(c)
+// 		}
+// 	}
+// }
+
+// func BenchmarkManyWritersDiode(b *testing.B) {
+// 	d := diodes.NewWaiter(diodes.NewManyToOne(10000, diodes.AlertFunc(func(int) {
+// 		// NOP
+// 	})))
+
+// 	var wg sync.WaitGroup
+// 	wg.Add(1)
+
+// 	go func() {
+// 		wg.Done()
+// 		for {
+// 			d.Next()
+// 			time.Sleep(100 * time.Millisecond)
+// 		}
+// 	}()
+
+// 	wg.Wait()
+// 	b.ResetTimer()
+// 	b.RunParallel(func(pb *testing.PB) {
+// 		var i int
+// 		for pb.Next() {
+// 			data := randData(i)
+// 			i++
+// 			d.Set(diodes.GenericDataType(data))
+// 		}
+// 	})
+// }
+
+// func BenchmarkManyWritersChannel(b *testing.B) {
+// 	c := make(chan []byte, 10000)
+
+// 	var wg sync.WaitGroup
+// 	wg.Add(1)
+
+// 	go func() {
+// 		wg.Done()
+// 		for range c {
+// 			time.Sleep(100 * time.Millisecond)
+// 		}
+// 	}()
+
+// 	wg.Wait()
+// 	b.ResetTimer()
+// 	b.RunParallel(func(pb *testing.PB) {
+// 		var i int
+// 		for pb.Next() {
+// 			data := randData(i)
+// 			i++
+// 			select {
+// 			case c <- *data:
+// 			default:
+// 				drainChannel(c)
+// 			}
+// 		}
+// 	})
+// }
 
 func drainChannel(c chan []byte) {
 	for {

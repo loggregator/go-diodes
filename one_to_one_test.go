@@ -56,31 +56,37 @@ var _ = Describe("OneToOne", func() {
 		})
 
 		Context("buffer size exceeded", func() {
+			var moreData []byte
+
 			BeforeEach(func() {
+				moreData = []byte("more-data")
 				for i := 0; i < 4; i++ {
-					d.Set(diodes.GenericDataType(&secondData))
+					d.Set(diodes.GenericDataType(&moreData))
 				}
 			})
 
 			It("wraps", func() {
-				data, _ := d.TryNext()
-				Expect(*(*[]byte)(data)).To(Equal(secondData))
+				genData, ok := d.TryNext()
+				Expect(ok).To(BeTrue())
+				Expect(*(*[]byte)(genData)).To(Equal(secondData))
 			})
 
 			It("alerts for each dropped point", func() {
 				d.TryNext()
-				Expect(spy.AlertInput.Missed).To(Receive(Equal(5)))
+				Expect(spy.AlertInput.Missed).To(Receive(Equal(1)))
 			})
 
 			It("it updates the read index", func() {
 				d.TryNext()
-				Expect(spy.AlertInput.Missed).To(Receive(Equal(5)))
+				Expect(spy.AlertInput.Missed).To(Receive(Equal(1)))
 
 				for i := 0; i < 6; i++ {
-					d.Set(diodes.GenericDataType(&secondData))
+					d.Set(diodes.GenericDataType(&moreData))
 				}
 
-				d.TryNext()
+				genData, ok := d.TryNext()
+				Expect(ok).To(BeTrue())
+				Expect(*(*[]byte)(genData)).To(Equal(moreData))
 				Expect(spy.AlertInput.Missed).To(Receive(Equal(5)))
 			})
 
@@ -105,7 +111,7 @@ var _ = Describe("OneToOne", func() {
 				})
 
 				It("sends an alert for each set", func() {
-					Expect(spy.AlertInput.Missed).To(Receive(Equal(10)))
+					Expect(spy.AlertInput.Missed).To(Receive(Equal(6)))
 				})
 			})
 
@@ -146,11 +152,11 @@ var _ = Describe("reader ahead of writer", func() {
 		Expect(spy.AlertInput.Missed).To(BeEmpty())
 		_, ok := d.TryNext()
 		Expect(ok).To(BeTrue())
-		Expect(spy.AlertInput.Missed).To(Receive(Equal(4)))
+		Expect(spy.AlertInput.Missed).To(Receive(Equal(1)))
 
-		By("failing reads until the writer writes over skipped values")
+		By("reader keeps reading from where it is")
 		_, ok = d.TryNext()
-		Expect(ok).To(BeFalse())
+		Expect(ok).To(BeTrue())
 		d.Set(genData)
 		_, ok = d.TryNext()
 		Expect(ok).To(BeTrue())

@@ -69,12 +69,12 @@ var _ = Describe("ManyToOne", func() {
 
 			It("alerts for each dropped point", func() {
 				d.TryNext()
-				Expect(spy.AlertInput.Missed).To(Receive(Equal(5)))
+				Expect(spy.AlertInput.Missed).To(Receive(Equal(1)))
 			})
 
 			It("it updates the read index", func() {
 				d.TryNext()
-				Expect(spy.AlertInput.Missed).To(Receive(Equal(5)))
+				Expect(spy.AlertInput.Missed).To(Receive(Equal(1)))
 
 				for i := 0; i < 6; i++ {
 					j := i
@@ -82,7 +82,7 @@ var _ = Describe("ManyToOne", func() {
 				}
 
 				data, _ := d.TryNext()
-				Expect(*(*int)(data)).To(Equal(5))
+				Expect(*(*int)(data)).To(Equal(1))
 				Expect(spy.AlertInput.Missed).To(Receive(Equal(5)))
 			})
 
@@ -107,7 +107,7 @@ var _ = Describe("ManyToOne", func() {
 				})
 
 				It("sends an alert for each set", func() {
-					Expect(spy.AlertInput.Missed).To(Receive(Equal(10)))
+					Expect(spy.AlertInput.Missed).To(Receive(Equal(6)))
 				})
 			})
 
@@ -147,11 +147,11 @@ var _ = Describe("reader ahead of writer", func() {
 		Expect(spy.AlertInput.Missed).To(BeEmpty())
 		_, ok := d.TryNext()
 		Expect(ok).To(BeTrue())
-		Expect(spy.AlertInput.Missed).To(Receive(Equal(4)))
+		Expect(spy.AlertInput.Missed).To(Receive(Equal(1)))
 
-		By("failing reads until the writer writes over skipped values")
+		By("reader keeps reading where it is")
 		_, ok = d.TryNext()
-		Expect(ok).To(BeFalse())
+		Expect(ok).To(BeTrue())
 		d.Set(genData)
 		_, ok = d.TryNext()
 		Expect(ok).To(BeTrue())

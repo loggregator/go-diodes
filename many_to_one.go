@@ -2,6 +2,7 @@ package diodes
 
 import (
 	"log"
+	"sync"
 	"sync/atomic"
 	"unsafe"
 )
@@ -13,6 +14,7 @@ type ManyToOne struct {
 	buffer     []unsafe.Pointer
 	readIndex  uint64
 	alerter    Alerter
+	mu         sync.RWMutex
 }
 
 // NewManyToOne creates a new diode (ring buffer). The ManyToOne diode
@@ -39,6 +41,7 @@ func NewManyToOne(size int, alerter Alerter) *ManyToOne {
 
 // Set sets the data in the next slot of the ring buffer.
 func (d *ManyToOne) Set(data GenericDataType) {
+	d.mu.RLock()
 	for {
 		writeIndex := atomic.AddUint64(&d.writeIndex, 1)
 		idx := writeIndex % uint64(len(d.buffer))
@@ -61,6 +64,7 @@ func (d *ManyToOne) Set(data GenericDataType) {
 			continue
 		}
 
+		d.mu.RUnlock()
 		return
 	}
 }
@@ -70,29 +74,12 @@ func (d *ManyToOne) Set(data GenericDataType) {
 func (d *ManyToOne) TryNext() (data GenericDataType, ok bool) {
 	// Read a value from the ring buffer based on the readIndex.
 	idx := d.readIndex % uint64(len(d.buffer))
-	result := (*bucket)(atomic.SwapPointer(&d.buffer[idx], nil))
+	result := (*bucket)(atomic.LoadPointer(&d.buffer[idx]))
 
 	// When the result is nil that means the writer has not had the
 	// opportunity to write a value into the diode. This value must be ignored
 	// and the read head must not increment.
 	if result == nil {
-		return nil, false
-	}
-
-	// When the seq value is less than the current read index that means a
-	// value was read from idx that was previously written but has since has
-	// been dropped. This value must be ignored and the read head must not
-	// increment.
-	//
-	// The simulation for this scenario assumes the fast forward occurred as
-	// detailed below.
-	//
-	// 5. The reader reads again getting seq 5. It then reads again expecting
-	//    seq 6 but gets seq 2. This is a read of a stale value that was
-	//    effectively "dropped" so the read fails and the read head stays put.
-	//    `| 4 | 5 | 2 | 3 |` r: 7, w: 6
-	//
-	if result.seq < d.readIndex {
 		return nil, false
 	}
 
@@ -106,20 +93,26 @@ func (d *ManyToOne) TryNext() (data GenericDataType, ok bool) {
 	// Here is a simulation of this scenario:
 	//
 	// 1. Both the read and write heads start at 0.
-	//    `| nil | nil | nil | nil |` r: 0, w: 0
+	//    `| nil | nil | nil | nil |` r: 0, w: -1
 	// 2. The writer fills the buffer.
-	//    `| 0 | 1 | 2 | 3 |` r: 0, w: 4
+	//    `| 0 | 1 | 2 | 3 |` r: 0, w: 3
 	// 3. The writer laps the read head.
-	//    `| 4 | 5 | 2 | 3 |` r: 0, w: 6
+	//    `| 4 | 5 | 2 | 3 |` r: 0, w: 5
 	// 4. The reader reads the first value, expecting a seq of 0 but reads 4,
 	//    this forces the reader to fast forward to 5.
-	//    `| 4 | 5 | 2 | 3 |` r: 5, w: 6
+	//    `| 4 | 5 | nil | 3 |` r: 3, w: 5
 	//
 	if result.seq > d.readIndex {
-		dropped := result.seq - d.readIndex
-		d.readIndex = result.seq
+		d.mu.Lock()
+		dropped := (d.writeIndex + 1) - d.readIndex - uint64(len(d.buffer))
 		d.alerter.Alert(int(dropped))
+		d.readIndex = (d.writeIndex + 1) - uint64(len(d.buffer))
+		idx = d.readIndex % uint64(len(d.buffer))
+		result = (*bucket)(atomic.LoadPointer(&d.buffer[idx]))
+		d.mu.Unlock()
 	}
+
+	atomic.CompareAndSwapPointer(&d.buffer[idx], nil, unsafe.Pointer(result))
 
 	// Only increment read index if a regular read occurred (where seq was
 	// equal to readIndex) or a value was read that caused a fast forward
